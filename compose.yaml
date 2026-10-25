@@ -1,0 +1,49 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    init: true
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN securely before starting}
+      ADMIN_ID: ${ADMIN_ID:-}
+      DATABASE_PATH: /app/data/dating.sqlite3
+      WEB_ENABLED: "1"
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: "8080"
+      WEBAPP_URL: ${WEBAPP_URL:-}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - dating-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+  https:
+    image: caddy:2-alpine
+    profiles: [https]
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - bot
+volumes:
+  caddy-data:
+  caddy-config:
+  dating-data:

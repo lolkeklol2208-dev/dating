@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+.env
+.env.*
+!.env.example
+data/
+*.sqlite3*
+
+wheelhouse/
+backups/
+docs/metch-preview.html
+docs/metch-preview.zip
+docs/Metch-Windows.zip

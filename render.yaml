@@ -1,0 +1,32 @@
+# A paid persistent disk is required for SQLite. Review Render's price before creating.
+services:
+  - type: web
+    name: metch-dating
+    runtime: python
+    region: frankfurt
+    plan: starter
+    branch: main
+    buildCommand: python -m pip install -r requirements.lock && python -m pip install --no-deps .
+    startCommand: python -m dating
+    healthCheckPath: /health
+    numInstances: 1
+    autoDeploy: false
+    disk:
+      name: metch-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.14"
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_ID
+        value: "8815384274"
+      - key: DATABASE_PATH
+        value: /var/data/dating.sqlite3
+      - key: BACKUP_DIR
+        value: /var/data/backups
+      - key: WEB_ENABLED
+        value: "1"
+      - key: WEB_HOST
+        value: 0.0.0.0
