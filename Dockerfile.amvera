@@ -1,7 +1,8 @@
 FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
     DATABASE_PATH=/data/metch/dating.sqlite3 BACKUP_DIR=/data/metch/backups \
-    WEB_ENABLED=1 WEB_HOST=0.0.0.0 WEB_PORT=8080 MIGRATION_MODE=1
+    WEB_ENABLED=1 WEB_HOST=0.0.0.0 WEB_PORT=8080 MIGRATION_MODE=1 \
+    ADMIN_ID=8815384274 WEBAPP_URL=https://metch-vtoroynax.msk1.amvera.tech
 WORKDIR /app
 COPY . /app
 RUN if [ -d /app/wheelhouse ]; then \
