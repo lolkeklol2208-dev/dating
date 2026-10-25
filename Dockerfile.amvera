@@ -1,0 +1,21 @@
+FROM python:3.12-slim
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
+    DATABASE_PATH=/data/metch/dating.sqlite3 BACKUP_DIR=/data/metch/backups \
+    WEB_ENABLED=1 WEB_HOST=0.0.0.0 WEB_PORT=8080 MIGRATION_MODE=1
+WORKDIR /app
+COPY . /app
+RUN if [ -d /app/wheelhouse ]; then \
+      python -m pip install --no-index --find-links=/app/wheelhouse 'setuptools==80.9.0' 'wheel==0.45.1' \
+      && python -m pip install --no-index --find-links=/app/wheelhouse -r requirements.lock \
+      && python -m pip install --no-deps --no-build-isolation .; \
+    else \
+      python -m pip install -r requirements.lock \
+      && python -m pip install --no-deps .; \
+    fi \
+    && rm -rf /app/wheelhouse \
+    && useradd --uid 10001 --create-home bot \
+    && mkdir -p /data/metch \
+    && chown bot:bot /data/metch
+EXPOSE 8080
+# First initialize a newly mounted volume, then run the app as UID 10001.
+ENTRYPOINT ["python", "-m", "dating.container_start"]

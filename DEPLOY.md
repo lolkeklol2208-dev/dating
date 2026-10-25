@@ -1,5 +1,7 @@
 # Публикация Мэтч
 
+**Основной выбранный хостинг теперь Amvera: [AMVERA.md](AMVERA.md).** Ниже сохранён альтернативный вариант Render; он не был запущен.
+
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/lolkeklol2208-dev/dating)
 
 Код запускается на Render как один Python web-service. Render предоставляет публичный HTTPS-адрес; покупать собственный домен не требуется. `render.yaml` запрашивает платный тариф Starter и постоянный диск 1 ГБ. Текущую стоимость и условия нужно проверить в Render перед созданием сервиса. Никакая оплата из облачной среды разработки не выполняется.
