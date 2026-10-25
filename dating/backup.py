@@ -1,4 +1,5 @@
 """Consistent online SQLite backups. Never copy a live WAL database as a file."""
+from contextlib import closing
 import argparse
 import os
 from pathlib import Path
@@ -17,8 +18,8 @@ def backup(source: str, destination: str):
     fd, temp = tempfile.mkstemp(prefix='.backup-', dir=target.parent)
     os.close(fd)  # mkstemp creates private (0600) files.
     try:
-        with sqlite3.connect(source_path.as_uri() + '?mode=ro', uri=True) as src:
-            with sqlite3.connect(temp) as dst:
+        with closing(sqlite3.connect(source_path.as_uri() + '?mode=ro', uri=True)) as src:
+            with closing(sqlite3.connect(temp)) as dst:
                 src.backup(dst)
                 if dst.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
                     raise ValueError('Проверка целостности резервной копии не пройдена')

@@ -7,6 +7,8 @@ from io import BytesIO
 import json
 from pathlib import Path
 import re
+import os
+import tempfile
 import time
 
 from aiohttp import web
@@ -14,6 +16,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.types import BufferedInputFile
 
 from dating.auth import validate_init_data
+from dating.deployment import BootstrapError, MAX_SNAPSHOT, verify_import_headers, service_proof
 
 ROOT = Path(__file__).with_name('web')
 API = web.AppKey('api', object)
@@ -45,8 +48,10 @@ def public_profile(p, own=False):
 @web.middleware
 async def boundary(request, handler):
     try:
-        if request.path.startswith('/api/'):
+        if request.path.startswith('/api/') and request.path not in {'/api/deploy/import','/api/deploy/challenge'}:
             service = request.app[API]
+            if service.bootstrap_pending:
+                raise ApiError(503,'Идёт безопасный перенос базы. Попробуйте открыть приложение позже.')
             try:
                 request['user'] = validate_init_data(request.headers.get('X-Telegram-Init-Data', ''), service.token)
             except (ValueError, TypeError, json.JSONDecodeError):
@@ -76,11 +81,66 @@ async def boundary(request, handler):
 
 
 class Service:
-    def __init__(self, store, bot, token, admin_id=None):
+    def __init__(self, store, bot, token, admin_id=None, bootstrap=False, public_url=None):
+        self.public_url = public_url
         self.store, self.bot, self.token, self.admin_id = store, bot, token, admin_id
         self.windows = OrderedDict()
         self.writes = asyncio.Lock()
         self.listeners = {}
+        self.bootstrap_pending = bootstrap
+        self.ready = asyncio.Event()
+        self.bootstrap_lock = asyncio.Lock()
+        if not bootstrap:
+            self.ready.set()
+
+    async def deployment_challenge(self, req):
+        if not self.bootstrap_pending or not self.public_url:
+            raise ApiError(404,'Первичный импорт закрыт')
+        nonce=req.query.get('nonce','')
+        if not re.fullmatch(r'[0-9a-f]{64}',nonce):
+            raise ApiError(400,'Неверный запрос проверки сервиса')
+        return web.json_response({'url':self.public_url,'proof':service_proof(self.token,self.public_url,nonce)})
+
+    async def import_database(self, req):
+        if not self.bootstrap_pending:
+            raise ApiError(404,'Первичный импорт закрыт')
+        stamp=req.headers.get('X-Metch-Time','')
+        digest=req.headers.get('X-Metch-SHA256','')
+        signature=req.headers.get('X-Metch-Signature','')
+        if not verify_import_headers(self.token,stamp,digest,signature):
+            raise ApiError(403,'Импорт не авторизован')
+        if req.content_length and req.content_length>MAX_SNAPSHOT:
+            raise ApiError(413,'Резервная копия слишком большая')
+        async with self.bootstrap_lock:
+            if not self.bootstrap_pending:
+                raise ApiError(404,'Первичный импорт уже выполнен')
+            directory=Path(self.store.path).resolve().parent
+            fd,temporary=tempfile.mkstemp(prefix='.import-',dir=directory)
+            path=Path(temporary)
+            try:
+                size=0
+                checksum=hashlib.sha256()
+                with os.fdopen(fd,'wb') as file:
+                    async for chunk in req.content.iter_chunked(65536):
+                        size+=len(chunk)
+                        if size>MAX_SNAPSHOT:
+                            raise ApiError(413,'Резервная копия слишком большая')
+                        checksum.update(chunk)
+                        file.write(chunk)
+                import hmac
+                if not hmac.compare_digest(checksum.hexdigest(),digest):
+                    raise ApiError(400,'Контрольная сумма базы не совпадает')
+                try:
+                    await self.store.import_snapshot(path)
+                except BootstrapError as exc:
+                    raise ApiError(409,str(exc))
+                self.bootstrap_pending=False
+                self.ready.set()
+                return web.json_response({'ok':True,'stats':await self.store.stats()})
+            finally:
+                path.unlink(missing_ok=True)
+                for suffix in ('-wal','-shm'):
+                    Path(str(path)+suffix).unlink(missing_ok=True)
 
     def publish(self, *users):
         for uid in users:
@@ -328,10 +388,12 @@ class Service:
         return web.json_response({'ok': True})
 
 
-def create_app(store, bot, token, admin_id=None):
-    service = Service(store, bot, token, admin_id)
+def create_app(store, bot, token, admin_id=None, bootstrap=False, public_url=None):
+    service = Service(store, bot, token, admin_id, bootstrap, public_url)
     app = web.Application(middlewares=[boundary], client_max_size=6 * 1024 * 1024)
     app[API] = service
+    app.router.add_get('/api/deploy/challenge',service.deployment_challenge)
+    app.router.add_post('/api/deploy/import',service.import_database)
     app.router.add_get('/api/events', service.events)
     app.router.add_get('/api/me', service.me)
     app.router.add_delete('/api/me', service.me)
@@ -347,7 +409,7 @@ def create_app(store, bot, token, admin_id=None):
     app.router.add_post('/api/settings', service.settings)
     app.router.add_post('/api/actions/{action}', service.action)
     async def health(request):
-        return web.json_response({'ok': True})
+        return web.json_response({'ok': True,'awaiting_import':service.bootstrap_pending})
     async def index(request):
         return web.FileResponse(ROOT / 'index.html')
     app.router.add_get('/health', health)

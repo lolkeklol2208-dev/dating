@@ -6,7 +6,7 @@ services:
     region: frankfurt
     plan: starter
     branch: main
-    buildCommand: python -m pip install -r requirements.lock && python -m pip install --no-deps .
+    buildCommand: python -m pip install -r requirements.lock && python -m pip install --no-deps . && python -m pytest -q
     startCommand: python -m dating
     healthCheckPath: /health
     numInstances: 1
@@ -26,6 +26,8 @@ services:
         value: /var/data/dating.sqlite3
       - key: BACKUP_DIR
         value: /var/data/backups
+      - key: MIGRATION_MODE
+        value: "1"
       - key: WEB_ENABLED
         value: "1"
       - key: WEB_HOST

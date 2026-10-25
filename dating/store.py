@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -102,7 +104,10 @@ class Store:
                 next_try REAL NOT NULL DEFAULT 0,
                 done INTEGER NOT NULL DEFAULT 0
             );
-            PRAGMA user_version=3;
+            CREATE TABLE IF NOT EXISTS deployment_state (
+                key TEXT PRIMARY KEY, value TEXT NOT NULL
+            );
+            PRAGMA user_version=4;
             CREATE INDEX IF NOT EXISTS notifications_pending ON notifications(done,next_try);
             CREATE INDEX IF NOT EXISTS messages_pair ON messages(a,b,id);
             CREATE INDEX IF NOT EXISTS profiles_search ON profiles(city_key, active, age);
@@ -409,3 +414,45 @@ class Store:
                 AND m.id>COALESCE((SELECT last_id FROM message_reads WHERE actor=me.id AND target=peer.id),0)''',
                 (uid, uid, uid, uid))
             return row['n']
+
+
+    async def needs_bootstrap(self):
+        async with self.lock:
+            marker=await self._one("SELECT value FROM deployment_state WHERE key='bootstrap'")
+            if marker:
+                return False
+            # Never treat an existing populated database as an empty target.
+            for table in ('profiles','fsm','bans','messages'):
+                row=await self._one(f'SELECT count(*) AS n FROM {table}')
+                if row['n']:
+                    return False
+            return True
+
+    async def import_snapshot(self, staged):
+        from dating.deployment import BootstrapError, validate_snapshot
+        await asyncio.to_thread(validate_snapshot,staged)
+        async with self.lock:
+            for table in ('profiles','fsm','bans','messages','deployment_state'):
+                row=await self._one(f'SELECT count(*) AS n FROM {table}')
+                if row['n']:
+                    raise BootstrapError('Целевая база уже содержит данные; замена запрещена')
+            if self.path==':memory:':
+                raise BootstrapError('Для импорта нужен постоянный диск')
+            await self.db.close()
+            old=Path(self.path+'.before-bootstrap')
+            shutil.copy2(self.path,old)
+            try:
+                os.replace(staged,self.path)
+                await self.open()
+                await self.db.execute("INSERT INTO deployment_state VALUES ('bootstrap','imported')")
+                await self.db.commit()
+            except BaseException:
+                try:
+                    await self.db.close()
+                finally:
+                    for suffix in ('-wal','-shm'):
+                        Path(self.path+suffix).unlink(missing_ok=True)
+                    os.replace(old,self.path)
+                    await self.open()
+                raise
+            old.unlink(missing_ok=True)
