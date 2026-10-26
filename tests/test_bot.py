@@ -37,12 +37,12 @@ class FakeSession(BaseSession):
 
 
 class Harness:
-    def __init__(self, db, admin_id=None):
+    def __init__(self, db, admin_id=None, webapp_url=None):
         self.session = FakeSession()
         self.bot = Bot('123456789:offline-test-token', session=self.session,
                        default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         self.dp = Dispatcher(storage=SQLiteStorage(db), events_isolation=SimpleEventIsolation())
-        self.dp.include_router(make_router(db, admin_id))
+        self.dp.include_router(make_router(db, admin_id, webapp_url))
         self.seq = 0
 
     async def send(self, uid=1, text=None, callback=None, photo=False, group=False):
@@ -153,3 +153,18 @@ async def test_filter_validation_and_pause(app):
     await h.send(callback='active:0')
     await h.send(callback='browse')
     assert 'Ваша анкета скрыта' in h.texts()
+
+
+async def test_admin_command_opens_mini_app_only_for_owner(app):
+    _, db = app
+    owner = Harness(db, admin_id=99, webapp_url='https://metch.example.test/')
+    try:
+        await owner.send(uid=99, text='/admin')
+        button = owner.session.sent[-1].reply_markup.inline_keyboard[0][0]
+        assert button.web_app.url == 'https://metch.example.test/?view=admin'
+        await owner.send(uid=1, text='/admin')
+        assert owner.session.sent[-1].reply_markup is None
+        assert 'только модератору' in owner.session.sent[-1].text
+    finally:
+        await owner.dp.storage.close()
+        await owner.bot.session.close()

@@ -1,5 +1,9 @@
 export const telegram = window.Telegram?.WebApp;
-export const demo = !telegram?.initData;
+// Telegram supplies the same signed payload in the launch hash. The server
+// still verifies its HMAC; this is only a transport fallback when the SDK fails.
+const launchParams = new URLSearchParams(location.hash.slice(1));
+const initData = telegram?.initData || launchParams.get('tgWebAppData') || '';
+export const demo = !initData;
 const photos = [
  '/assets/images/anya.png',
  '/assets/images/mark.png',
@@ -39,7 +43,7 @@ async function demoRequest(path,{method='GET',body}={}){
 }
 export async function api(path, options={}){
  if(demo)return demoRequest(path,options);
- const headers={'X-Telegram-Init-Data':telegram.initData,...options.headers};
+ const headers={'X-Telegram-Init-Data':initData,...options.headers};
  if(options.body&&!(options.body instanceof FormData))headers['Content-Type']='application/json';
  const controller=new AbortController(), timeout=setTimeout(()=>controller.abort(),30000);
  try{
@@ -73,7 +77,7 @@ export function subscribe(refresh){
   if(document.hidden||controller)return;
   controller=new AbortController();
   try{
-   const response=await fetch('/api/events',{headers:{'X-Telegram-Init-Data':telegram.initData},signal:controller.signal});
+   const response=await fetch('/api/events',{headers:{'X-Telegram-Init-Data':initData},signal:controller.signal});
    if(!response.ok)throw new Error('Stream unavailable');
    const reader=response.body.getReader(),decoder=new TextDecoder();let pending='';
    while(true){const {value,done}=await reader.read();if(done)break;pending+=decoder.decode(value,{stream:true});let split;

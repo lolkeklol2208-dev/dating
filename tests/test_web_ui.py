@@ -105,3 +105,83 @@ async def test_self_contained_preview_editor_and_export(tmp_path):
             assert external==[] and errors==[]
         finally:
             await browser.close()
+
+
+async def test_mobile_admin_reports_ban_unban_audit_and_owner_without_profile(webapp, tmp_path):
+    from playwright.async_api import expect
+    client, db, _ = webapp
+    await add(db, 1, name='Марк')
+    await add(db, 2, name='Анна', bio='Люблю <кино> & музыку')
+    await db.block(1, 2, 'spam')
+    async with playwright.async_playwright() as p:
+        browser = await p.chromium.launch(executable_path=shutil.which('chromium'), args=['--no-sandbox'])
+        try:
+            page, errors = await telegram_page(browser, str(client.make_url('/')), 99)
+            await page.get_by_role('button', name='Админ-панель', exact=True).click()
+            await page.get_by_role('heading', name='Всё под контролем.').wait_for()
+            await page.screenshot(path=str(tmp_path/'admin-dark.png'), full_page=True)
+            await page.locator('.admin-tabs [data-action=admin-reports]').click()
+            await page.get_by_role('button', name='Посмотреть анкету', exact=True).click()
+            modal = page.locator('#modal')
+            await expect(modal.locator('.admin-bio')).to_have_text('Люблю <кино> & музыку')
+            assert await modal.locator('кино').count() == 0
+            await modal.get_by_role('button', name='Закрыть', exact=True).click()
+            await page.locator('[data-action=admin-ban]').click()
+            await modal.get_by_label('Причина решения', exact=True).fill('Проверенный спам в анкете')
+            await modal.get_by_role('button', name='Заблокировать', exact=True).click()
+            await page.get_by_text('Новых жалоб нет. Здесь спокойно 💜', exact=True).wait_for()
+            assert await db.is_banned(2)
+            await page.locator('.admin-tabs [data-action=admin-users]').click()
+            await page.get_by_label('Поиск пользователей', exact=True).fill('2')
+            await page.get_by_role('button', name='Найти', exact=True).click()
+            await expect(page.locator('.admin-user')).to_have_count(1)
+            await page.locator('.admin-user').click()
+            await modal.get_by_role('button', name='Снять блокировку', exact=True).click()
+            await modal.get_by_label('Причина решения', exact=True).fill('Апелляция проверена')
+            await modal.get_by_role('button', name='Снять блокировку', exact=True).click()
+            await expect(modal).not_to_be_visible()
+            await page.locator('.admin-tabs [data-action=admin-audit]').click()
+            await expect(page.locator('.admin-audit')).to_have_count(2)
+            assert not await db.is_banned(2)
+            await page.get_by_role('button', name='Светлая тема', exact=True).click()
+            await page.screenshot(path=str(tmp_path/'admin-light.png'), full_page=True)
+            assert not await page.evaluate('document.documentElement.scrollWidth>innerWidth')
+            other, other_errors = await telegram_page(browser, str(client.make_url('/')), 1)
+            await other.locator('#swipe-card, .empty').first.wait_for()
+            assert await other.get_by_role('button', name='Админ-панель', exact=True).count() == 0
+            assert errors == other_errors == []
+        finally:
+            await browser.close()
+
+
+async def test_telegram_launch_hash_works_while_external_sdk_stalls_and_tampering_fails(webapp):
+    import asyncio
+    from urllib.parse import urlencode
+    client, _, _ = webapp
+    gate = asyncio.Event()
+    async with playwright.async_playwright() as p:
+        browser = await p.chromium.launch(executable_path=shutil.which('chromium'), args=['--no-sandbox'])
+        try:
+            page = await browser.new_page(viewport={'width':390,'height':844})
+            errors=[]
+            page.on('pageerror', lambda e: errors.append(str(e)))
+            async def stalled_sdk(route):
+                await gate.wait()
+                await route.abort()
+            await page.route('https://telegram.org/**', stalled_sdk)
+            launch = str(client.make_url('/'))+'#'+urlencode({'tgWebAppData':signed(99)})
+            await page.goto(launch, wait_until='domcontentloaded')
+            await page.get_by_role('button', name='Админ-панель', exact=True).wait_for(timeout=6000)
+            assert await page.locator('.demo-banner').count() == 0
+            assert not await page.evaluate('Boolean(window.Telegram)')
+            await page.get_by_role('button', name='Админ-панель', exact=True).click()
+            await page.get_by_role('heading', name='Всё под контролем.').wait_for()
+            gate.set()
+            assert errors == []
+            await page.goto(str(client.make_url('/'))+'#'+urlencode({'tgWebAppData':signed(99).replace('Test','Hacker')}), wait_until='domcontentloaded')
+            await page.reload(wait_until='domcontentloaded')
+            await page.get_by_role('heading', name='Не удалось войти', exact=True).wait_for()
+            assert await page.get_by_role('button', name='Админ-панель', exact=True).count() == 0
+        finally:
+            gate.set()
+            await browser.close()

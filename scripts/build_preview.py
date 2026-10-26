@@ -28,21 +28,22 @@ def build(destination=None):
     motion = source('motion.js').replace("matchMedia('(prefers-reduced-motion: reduce)').matches", "window.__metchPreviewReducedMotion || matchMedia('(prefers-reduced-motion: reduce)').matches")
     app = source('app.js').replace('/assets/logo.svg', logo)
     # Offline demo cannot accidentally call the authenticated production transport.
-    api = api.replace("const demo = !telegram?.initData;", 'const demo = true;')
+    api = api.replace("const demo = !initData;", 'const demo = true;')
     code = '\n'.join([
         '(()=>{\n"use strict";',
         'const ApiModule=(()=>{' + api + '\nreturn {api,post,demo,telegram,imageSource,clearPhotos,subscribe};})();',
         'const IconModule=(()=>{' + source('icons.js') + '\nreturn {icon};})();',
+        'const AdminModule=(()=>{const {api,post}=ApiModule; const {icon}=IconModule;' + source('admin.js') + '\nreturn {createAdmin};})();',
         'const MotionModule=(()=>{' + motion + '\nreturn {spring,springStep};})();',
-        '(()=>{const {api,post,demo,telegram:tg,imageSource,clearPhotos,subscribe}=ApiModule; const {icon}=IconModule; const {spring}=MotionModule;',
+        '(()=>{const {api,post,demo,telegram:tg,imageSource,clearPhotos,subscribe}=ApiModule; const {icon}=IconModule; const {spring}=MotionModule; const {createAdmin}=AdminModule;',
         app,
         (ROOT / 'scripts' / 'preview_editor.js').read_text(),
         '})();\n})();'
     ])
     html = (WEB / 'index.html').read_text().replace('/assets/logo.svg', logo)
     html = html.replace('<link rel="stylesheet" href="/assets/style.css">', '<style>' + (WEB / 'style.css').read_text() + '\n' + (ROOT / 'scripts' / 'preview_editor.css').read_text() + '</style>')
-    html = html.replace('<script src="https://telegram.org/js/telegram-web-app.js"></script>', '')
-    html = html.replace('<script type="module" src="/assets/app.js"></script>', '')
+    html = html.replace('<script async src="https://telegram.org/js/telegram-web-app.js" id="telegram-sdk"></script>', '')
+    html = html.replace('<script type="module" src="/assets/boot.js"></script>', '')
     html = html.replace('</body>', '<script>' + code.replace('</script', '<\\/script') + '</script></body>')
     html = html.replace('<title>Мэтч — на одной волне</title>', '<title>Мэтч · интерактивное превью и редактор</title>')
     destination.parent.mkdir(parents=True, exist_ok=True)

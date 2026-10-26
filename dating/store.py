@@ -7,9 +7,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import aiosqlite
+from dating.admin_store import AdminStore
 
 
-class Store:
+class Store(AdminStore):
     def __init__(self, path: str):
         self.path = path
         self.lock = asyncio.Lock()
@@ -19,6 +20,7 @@ class Store:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self.db = await aiosqlite.connect(self.path)
         self.db.row_factory = aiosqlite.Row
+        await self.db.create_function('casefold', 1, lambda value: str(value or '').casefold(), deterministic=True)
         await self.db.executescript('''
             PRAGMA journal_mode=WAL;
             PRAGMA foreign_keys=ON;
@@ -107,7 +109,14 @@ class Store:
             CREATE TABLE IF NOT EXISTS deployment_state (
                 key TEXT PRIMARY KEY, value TEXT NOT NULL
             );
-            PRAGMA user_version=4;
+            CREATE TABLE IF NOT EXISTS moderation_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                moderator INTEGER NOT NULL, target INTEGER NOT NULL,
+                action TEXT NOT NULL CHECK(action IN ('ban','unban','dismiss')),
+                reason TEXT NOT NULL, report_actor INTEGER,
+                created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            PRAGMA user_version=5;
             CREATE INDEX IF NOT EXISTS notifications_pending ON notifications(done,next_try);
             CREATE INDEX IF NOT EXISTS messages_pair ON messages(a,b,id);
             CREATE INDEX IF NOT EXISTS profiles_search ON profiles(city_key, active, age);

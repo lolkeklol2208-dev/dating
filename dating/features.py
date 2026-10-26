@@ -5,13 +5,14 @@ from html import escape
 from aiogram import F
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from dating.admin_store import ModerationConflict
 
 log = logging.getLogger(__name__)
 DELIVERY_ERRORS = (TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError)
 
 
-def register_features(router, store, admin_id, keyboard, home):
+def register_features(router, store, admin_id, keyboard, home, webapp_url=None):
     @router.message(Command('delete'))
     async def delete_command(message: Message):
         await message.answer('Удалить анкету и черновики? Это действие нельзя отменить.',
@@ -23,10 +24,15 @@ def register_features(router, store, admin_id, keyboard, home):
             await message.answer('Этот раздел доступен только модератору.')
             return
         stats = await store.stats()
+        markup = keyboard([('Новые жалобы', 'admin:reports')])
+        if webapp_url:
+            markup = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text='Открыть админ-панель',
+                    web_app=WebAppInfo(url=webapp_url.rstrip('/')+'/?view=admin'))]])
         await message.answer('<b>Мэтч · Модерация</b>\n' + '\n'.join([
             f'Анкеты: {stats["profiles"]}', f'Совпадения: {stats["matches"]}',
             f'Сообщения: {stats["messages"]}', f'Жалобы: {stats["reports"]}', f'Баны: {stats["bans"]}']),
-            reply_markup=keyboard([('Новые жалобы', 'admin:reports')]))
+            reply_markup=markup)
 
     @router.callback_query(F.data == 'admin:reports')
     async def reports(call: CallbackQuery):
@@ -63,7 +69,11 @@ def register_features(router, store, admin_id, keyboard, home):
             await call.message.answer('Подтвердить блокировку пользователя во всём боте?', reply_markup=keyboard(
                 [('Подтвердить бан', f'modconfirm:{actor}:{target}')], [('Отмена', 'admin:reports')]))
         else:
-            await store.review(int(actor), int(target), 'dismissed')
+            try:
+                await store.moderate(admin_id, int(target), 'dismiss', 'Отклонено модератором в боте', int(actor))
+            except (ModerationConflict, ValueError) as exc:
+                await call.message.answer(escape(str(exc)))
+                return
             await call.message.answer('Жалоба закрыта. Личная блокировка заявителя сохранена.')
 
     @router.callback_query(F.data.regexp(r'^modconfirm:\d+:\d+$'))
@@ -75,8 +85,11 @@ def register_features(router, store, admin_id, keyboard, home):
         if int(target) == admin_id:
             await call.answer('Нельзя забанить себя', show_alert=True)
             return
-        await store.ban(int(target), 'moderator')
-        await store.review(int(actor), int(target), 'banned')
+        try:
+            await store.moderate(admin_id, int(target), 'ban', 'Жалоба подтверждена модератором в боте', int(actor))
+        except (ModerationConflict, ValueError) as exc:
+            await call.answer(str(exc), show_alert=True)
+            return
         await call.answer('Пользователь заблокирован')
         await call.message.answer(f'Бан применён к ID {target}. Для снятия: /unban {target}')
 
@@ -89,7 +102,11 @@ def register_features(router, store, admin_id, keyboard, home):
         if len(parts) != 2 or not parts[1].isascii() or not parts[1].isdigit():
             await message.answer('Использование: /unban Telegram_ID')
             return
-        await store.unban(int(parts[1]))
+        try:
+            await store.moderate(admin_id, int(parts[1]), 'unban', 'Блокировка снята модератором в боте')
+        except (ModerationConflict, ValueError) as exc:
+            await message.answer(escape(str(exc)))
+            return
         await message.answer('Бан снят. Личные блокировки участников сохраняются.')
 
     @router.message(Command('id'))

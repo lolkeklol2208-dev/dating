@@ -16,6 +16,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.types import BufferedInputFile
 
 from dating.auth import validate_init_data
+from dating.admin_api import register_admin
 from dating.deployment import BootstrapError, MAX_SNAPSHOT, verify_import_headers, service_proof
 
 ROOT = Path(__file__).with_name('web')
@@ -202,7 +203,8 @@ class Service:
             await self.store.delete(uid)
             return web.json_response({'ok': True})
         await self.store.update_username(uid, req['user'].get('username'))
-        return web.json_response({'user': {'id': uid, 'first_name': req['user'].get('first_name', '')},
+        return web.json_response({'user': {'id': uid, 'first_name': req['user'].get('first_name', ''),
+                                         'is_admin': bool(self.admin_id and uid == self.admin_id)},
                                  'profile': public_profile(await self.store.profile(uid), own=True)})
 
     async def profile(self, req):
@@ -392,6 +394,7 @@ def create_app(store, bot, token, admin_id=None, bootstrap=False, public_url=Non
     service = Service(store, bot, token, admin_id, bootstrap, public_url)
     app = web.Application(middlewares=[boundary], client_max_size=6 * 1024 * 1024)
     app[API] = service
+    register_admin(app, service, ApiError, number, public_profile)
     app.router.add_get('/api/deploy/challenge',service.deployment_challenge)
     app.router.add_post('/api/deploy/import',service.import_database)
     app.router.add_get('/api/events', service.events)
