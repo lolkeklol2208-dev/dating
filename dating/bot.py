@@ -65,6 +65,10 @@ def make_router(store: Store, admin_id: int | None = None, webapp_url: str | Non
     register_features(router, store, admin_id, keyboard, HOME, webapp_url)
 
     async def show_home(message):
+        if webapp_url:
+            await message.answer('Ваши знакомства и диалоги — в Мэтч 💜\n\nНажмите кнопку ниже. Если кнопка меню пропала — отправьте /app.',
+                                 reply_markup=app_keyboard(webapp_url))
+            return
         await message.answer('<b>Мэтч</b>\nЗнакомства начинаются с одного «привет».\n\nВыберите, что хочется сделать.', reply_markup=HOME)
 
     async def show_card(message, p, own=False):
@@ -95,6 +99,12 @@ def make_router(store: Store, admin_id: int | None = None, webapp_url: str | Non
         await state.clear()
         await state.set_state(Form.name)
         await message.answer('<b>Ваша анкета · 1/7</b>\nКак вас зовут? От 2 до 30 символов.\n\nОтменить можно на любом шаге: /cancel', reply_markup=CANCEL)
+
+    @router.message(Command('app'))
+    async def open_app(message: Message, state: FSMContext):
+        await store.leave_chat(message.from_user.id)
+        await state.clear()
+        await show_home(message)
 
     @router.message(CommandStart())
     async def start(message: Message, state: FSMContext):

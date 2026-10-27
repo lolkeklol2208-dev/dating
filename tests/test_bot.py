@@ -168,3 +168,26 @@ async def test_admin_command_opens_mini_app_only_for_owner(app):
     finally:
         await owner.dp.storage.close()
         await owner.bot.session.close()
+
+
+async def test_app_and_cancel_show_inline_web_app_button_and_leave_registration(app):
+    from aiogram.fsm.storage.base import StorageKey
+    _, db = app
+    app_bot = Harness(db, admin_id=99, webapp_url='https://metch.example.test/')
+    try:
+        await add(db, 1)
+        await app_bot.send(callback='edit')
+        key = StorageKey(bot_id=app_bot.bot.id, chat_id=1, user_id=1)
+        assert await app_bot.dp.storage.get_state(key)
+        await app_bot.send(text='/app')
+        assert await app_bot.dp.storage.get_state(key) is None
+        button = app_bot.session.sent[-1].reply_markup.inline_keyboard[0][0]
+        assert button.web_app.url == 'https://metch.example.test/' and button.callback_data is None
+        assert (await db.profile(1))['name'] == 'Анна'
+        await app_bot.send(text='/cancel')
+        assert app_bot.session.sent[-1].reply_markup.inline_keyboard[0][0].web_app is not None
+        await app_bot.send(callback='home')
+        assert app_bot.session.sent[-1].reply_markup.inline_keyboard[0][0].web_app is not None
+    finally:
+        await app_bot.dp.storage.close()
+        await app_bot.bot.session.close()
