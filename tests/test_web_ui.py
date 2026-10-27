@@ -187,97 +187,6 @@ async def test_telegram_launch_hash_works_while_external_sdk_stalls_and_tamperin
             await browser.close()
 
 
-async def test_owner_testing_catalog_mobile_filters_notes_and_safe_export(webapp, tmp_path):
-    import csv
-    import io
-    from playwright.async_api import expect
-    client, db, _ = webapp
-    async with playwright.async_playwright() as p:
-        browser = await p.chromium.launch(executable_path=shutil.which('chromium'), args=['--no-sandbox'])
-        try:
-            page, errors = await telegram_page(browser, str(client.make_url('/')), 99)
-            await page.get_by_role('button', name='Админ-панель', exact=True).click()
-            await page.get_by_role('button', name='Открыть тестовый каталог', exact=False).click()
-            await expect(page.locator('.testing-card')).to_have_count(20)
-            assert 'Это не реальные участницы' in await page.locator('.testing-notice').inner_text()
-            assert await page.locator('.testing-card').first.locator('.test-portrait').get_attribute('style')
-            await page.locator('.testing-card').first.scroll_into_view_if_needed()
-            await page.screenshot(path=str(tmp_path/'testing-dark.png'))
-            assert not await page.evaluate('document.documentElement.scrollWidth>innerWidth')
-            await page.get_by_role('button', name='Далее', exact=True).click()
-            await expect(page.locator('.testing-card h2').first).to_have_text('Вера, 28')
-            await page.get_by_role('button', name='Сбросить', exact=True).click()
-            await page.get_by_role('textbox', name='Поиск', exact=True).fill('НАДЯ')
-            await page.get_by_label('Город', exact=True).select_option('Москва')
-            await page.get_by_label('Возраст от', exact=True).fill('24')
-            await page.get_by_label('Возраст до', exact=True).fill('24')
-            await page.get_by_role('button', name='Применить', exact=True).click()
-            await expect(page.locator('.testing-card')).to_have_count(1)
-            await page.get_by_role('button', name='Посмотреть и оценить', exact=True).click()
-            modal = page.locator('#modal')
-            await modal.get_by_label('Оценка', exact=True).select_option('4')
-            await modal.get_by_label('Статус проверки', exact=True).select_option('needs_work')
-            await modal.get_by_label('Заметка', exact=True).fill('=2+2 <script>alert(1)</script>')
-            await modal.get_by_role('button', name='Сохранить оценку', exact=True).click()
-            await expect(modal).not_to_be_visible()
-            assert (await db.testing_profile('test-011'))['review']['rating'] == 4
-            await page.get_by_role('button', name='Посмотреть и оценить', exact=True).click()
-            await expect(modal.get_by_label('Заметка', exact=True)).to_have_value('=2+2 <script>alert(1)</script>')
-            await modal.get_by_role('button', name='Закрыть', exact=True).click()
-            async with page.expect_download() as download:
-                await page.get_by_role('button', name='Скачать CSV · все 100', exact=False).click()
-            target=tmp_path/'catalog.csv'
-            await (await download.value).save_as(target)
-            rows=list(csv.DictReader(io.StringIO(target.read_text(encoding='utf-8-sig')),delimiter=';'))
-            assert len(rows)==100 and all(row['Тестовая анкета']=='Да' for row in rows)
-            note=next(row['Заметка'] for row in rows if row['ID']=='test-011')
-            assert note.startswith("'=2+2")
-            await page.get_by_role('button', name='Светлая тема', exact=True).click()
-            await page.screenshot(path=str(tmp_path/'testing-light.png'))
-            assert not await page.evaluate('document.documentElement.scrollWidth>innerWidth')
-            assert errors==[] and (await db.stats())['profiles']==0
-        finally:
-            await browser.close()
-
-
-async def test_second_telegram_account_can_browse_test_profiles_without_admin_access(webapp, tmp_path):
-    from playwright.async_api import expect
-    client, db, _ = webapp
-    await db.review_testing_profile('test-001',5,'needs_work','PRIVATE OWNER NOTE',0)
-    async with playwright.async_playwright() as p:
-        browser=await p.chromium.launch(executable_path=shutil.which('chromium'),args=['--no-sandbox'])
-        try:
-            page,errors=await telegram_page(browser,str(client.make_url('/')),2)
-            await page.get_by_role('button',name='Посмотреть тестовые анкеты',exact=True).click()
-            await expect(page.locator('.testing-card')).to_have_count(20)
-            assert await page.get_by_role('button',name='Админ-панель',exact=True).count()==0
-            assert await page.get_by_role('button',name='Скачать CSV · все 100',exact=False).count()==0
-            assert await page.locator('.testing-rating').count()==0
-            assert await page.get_by_label('Проверка',exact=True).count()==0
-            assert 'Это не реальные участницы' in await page.locator('.testing-notice').inner_text()
-            await page.get_by_role('textbox',name='Поиск',exact=True).fill('Аня')
-            await page.get_by_label('Город',exact=True).select_option('Москва')
-            await page.get_by_label('Возраст от',exact=True).fill('23')
-            await page.get_by_label('Возраст до',exact=True).fill('23')
-            await page.get_by_role('button',name='Применить',exact=True).click()
-            await expect(page.locator('.testing-card')).to_have_count(1)
-            await page.get_by_role('button',name='Посмотреть анкету',exact=True).click()
-            modal=page.locator('#modal')
-            await expect(modal.get_by_role('heading',name='Аня, 23',exact=True)).to_be_visible()
-            assert await modal.locator('form').count()==0
-            assert 'PRIVATE OWNER NOTE' not in await page.locator('body').inner_text()
-            await page.screenshot(path=str(tmp_path/'second-account-preview.png'))
-            await modal.get_by_role('button',name='Вернуться в каталог',exact=True).click()
-            await page.get_by_role('button',name='Вернуться к знакомствам',exact=True).click()
-            await page.get_by_role('button',name='Создать анкету',exact=True).wait_for()
-            assert (await db.stats())['profiles']==0 and await db.matches(2)==[]
-            assert (await db.testing_profile('test-001'))['review']['notes']=='PRIVATE OWNER NOTE'
-            assert not await page.evaluate('document.documentElement.scrollWidth>innerWidth')
-            assert errors==[]
-        finally:
-            await browser.close()
-
-
 async def test_consented_virtual_match_friend_message_operator_reply_and_withdrawal(webapp,tmp_path):
     from playwright.async_api import expect
     client,db,_=webapp
@@ -285,6 +194,9 @@ async def test_consented_virtual_match_friend_message_operator_reply_and_withdra
         browser=await p.chromium.launch(executable_path=shutil.which('chromium'),args=['--no-sandbox'])
         try:
             friend,errors=await telegram_page(browser,str(client.make_url('/')),1)
+            await expect(friend.get_by_role('button',name='Включить тестовые знакомства',exact=True)).to_be_visible()
+            await expect(friend.locator('[data-action=testing]')).to_have_count(0)
+            await expect(friend.get_by_text('100 тестовых анкет',exact=True)).to_have_count(0)
             await friend.get_by_role('button',name='Включить тестовые знакомства',exact=True).click()
             modal=friend.locator('#modal')
             await expect(modal).to_contain_text('Ваши сообщения читает администратор')
@@ -303,6 +215,9 @@ async def test_consented_virtual_match_friend_message_operator_reply_and_withdra
             await friend.get_by_text('Привет! Проверяю тестовое знакомство.',exact=True).wait_for()
             owner,owner_errors=await telegram_page(browser,str(client.make_url('/')),99)
             await owner.get_by_role('button',name='Админ-панель',exact=True).click()
+            await expect(owner.get_by_role('button',name='Открыть тестовые диалоги',exact=False)).to_be_visible()
+            await expect(owner.locator('[data-action=testing]')).to_have_count(0)
+            await expect(owner.get_by_text('100 тестовых анкет',exact=True)).to_have_count(0)
             await owner.get_by_role('button',name='Открыть тестовые диалоги',exact=False).click()
             await expect(owner.locator('.chat-row[data-action=virtual-operator]')).to_have_count(1)
             await owner.locator('.chat-row[data-action=virtual-operator]').click()
