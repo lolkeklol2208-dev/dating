@@ -33,10 +33,11 @@ def build(destination=None):
         '(()=>{\n"use strict";',
         'const ApiModule=(()=>{' + api + '\nreturn {api,post,demo,telegram,imageSource,clearPhotos,subscribe};})();',
         'const IconModule=(()=>{' + source('icons.js') + '\nreturn {icon};})();',
+        'const VirtualModule=(()=>{const {api,post,telegram:tg}=ApiModule; const {icon}=IconModule;' + source('virtual.js') + '\nreturn {createVirtual};})();',
         'const TestingModule=(()=>{const {api,post}=ApiModule; const {icon}=IconModule;' + source('testing.js') + '\nreturn {createTesting};})();',
         'const AdminModule=(()=>{const {api,post}=ApiModule; const {icon}=IconModule;' + source('admin.js') + '\nreturn {createAdmin};})();',
         'const MotionModule=(()=>{' + motion + '\nreturn {spring,springStep};})();',
-        '(()=>{const {api,post,demo,telegram:tg,imageSource,clearPhotos,subscribe}=ApiModule; const {icon}=IconModule; const {spring}=MotionModule; const {createAdmin}=AdminModule; const {createTesting}=TestingModule;',
+        '(()=>{const {api,post,demo,telegram:tg,imageSource,clearPhotos,subscribe}=ApiModule; const {icon}=IconModule; const {spring}=MotionModule; const {createAdmin}=AdminModule; const {createTesting}=TestingModule; const {createVirtual}=VirtualModule;',
         app,
         (ROOT / 'scripts' / 'preview_editor.js').read_text(),
         '})();\n})();'

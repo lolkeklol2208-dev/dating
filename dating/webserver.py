@@ -18,6 +18,7 @@ from aiogram.types import BufferedInputFile
 from dating.auth import validate_init_data
 from dating.admin_api import register_admin
 from dating.testing_api import register_testing_preview
+from dating.virtual_api import register_virtual
 from dating.deployment import BootstrapError, MAX_SNAPSHOT, verify_import_headers, service_proof
 
 ROOT = Path(__file__).with_name('web')
@@ -206,7 +207,8 @@ class Service:
         await self.store.update_username(uid, req['user'].get('username'))
         return web.json_response({'user': {'id': uid, 'first_name': req['user'].get('first_name', ''),
                                          'is_admin': bool(self.admin_id and uid == self.admin_id)},
-                                 'profile': public_profile(await self.store.profile(uid), own=True)})
+                                 'profile': public_profile(await self.store.profile(uid), own=True),
+                                 'virtual': await self.store.virtual_state(uid)})
 
     async def profile(self, req):
         uid = req['user']['id']
@@ -288,11 +290,22 @@ class Service:
         await self.bot.download_file(file.file_path, destination=buffer)
         return web.Response(body=buffer.getvalue(), content_type='image/jpeg')
 
+    async def feed_candidate(self, uid):
+        real=await self.store.candidate(uid)
+        virtual=await self.store.virtual_candidate(uid) if self.admin_id else None
+        if real and virtual:
+            return real if await self.store.virtual_turn(uid)%2 else virtual
+        return virtual or real
+
     async def candidate(self, req):
-        p = await self.store.profile(req['user']['id'])
-        if not p:
+        uid=req['user']['id']
+        p = await self.store.profile(uid)
+        state=await self.store.virtual_state(uid)
+        if not p and not state['enabled']:
             raise ApiError(409, 'Сначала создайте анкету')
-        return web.json_response({'profile': public_profile(await self.store.candidate(p['id'])), 'active': bool(p['active'])})
+        candidate=await self.feed_candidate(uid)
+        return web.json_response({'profile': candidate if candidate and candidate.get('is_virtual') else public_profile(candidate),
+                                  'active': bool(p and p['active']), 'virtual': state})
 
     async def reaction(self, req):
         data = await req.json()
@@ -300,10 +313,11 @@ class Service:
         if kind not in {'like', 'skip'}:
             raise ApiError(400, 'Неизвестная реакция')
         async with self.writes:
-            candidate = await self.store.candidate(req['user']['id'])
+            candidate = await self.feed_candidate(req['user']['id'])
             if not candidate or candidate['id'] != target:
                 raise ApiError(409, 'Анкета уже просмотрена или недоступна')
             result = await self.store.react(req['user']['id'], target, kind, notify=True)
+            await self.store.virtual_turn(req['user']['id'],advance=True)
         if result:
             self.publish(req['user']['id'], target)
         return web.json_response({'match': result is True})
@@ -316,7 +330,9 @@ class Service:
         for p in rows:
             summary = await self.store.chat_summary(uid, p['id'])
             output.append({**public_profile(p), **summary})
-        return web.json_response({'matches': output, 'more': len(rows) == 5, 'unread_total': await self.store.unread_total(uid)})
+        virtual=await self.store.virtual_threads(uid)
+        return web.json_response({'matches': output, 'more': len(rows) == 5, 'unread_total': await self.store.unread_total(uid),
+                                  'virtual_matches':virtual['threads'],'virtual_unread_total':virtual['unread_total']})
 
     async def messages(self, req):
         uid, target = req['user']['id'], number(req.match_info['target'])
@@ -367,6 +383,7 @@ class Service:
         uid, action = req['user']['id'], req.match_info['action']
         if action == 'reset':
             await self.store.reset_skips(uid)
+            await self.store.virtual_reset_skips(uid)
         else:
             data = await req.json()
             target = number(data.get('target'))
@@ -397,6 +414,7 @@ def create_app(store, bot, token, admin_id=None, bootstrap=False, public_url=Non
     app[API] = service
     register_admin(app, service, ApiError, number, public_profile)
     register_testing_preview(app, ApiError, number)
+    register_virtual(app, service, ApiError, number)
     app.router.add_get('/api/deploy/challenge',service.deployment_challenge)
     app.router.add_post('/api/deploy/import',service.import_database)
     app.router.add_get('/api/events', service.events)

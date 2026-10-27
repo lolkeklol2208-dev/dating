@@ -9,9 +9,10 @@ from pathlib import Path
 import aiosqlite
 from dating.admin_store import AdminStore
 from dating.testing_catalog import TestingCatalogStore
+from dating.virtual_store import VirtualStore
 
 
-class Store(AdminStore, TestingCatalogStore):
+class Store(AdminStore, TestingCatalogStore, VirtualStore):
     def __init__(self, path: str):
         self.path = path
         self.lock = asyncio.Lock()
@@ -124,7 +125,31 @@ class Store(AdminStore, TestingCatalogStore):
                 notes TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1,
                 updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            PRAGMA user_version=6;
+            CREATE TABLE IF NOT EXISTS virtual_sessions (
+                uid INTEGER PRIMARY KEY, participant_name TEXT NOT NULL, version INTEGER NOT NULL,
+                accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, turn INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS virtual_reactions (
+                uid INTEGER NOT NULL REFERENCES virtual_sessions(uid) ON DELETE CASCADE,
+                character_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('like','skip','closed')),
+                PRIMARY KEY(uid,character_id)
+            );
+            CREATE TABLE IF NOT EXISTS virtual_threads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uid INTEGER NOT NULL REFERENCES virtual_sessions(uid) ON DELETE CASCADE,
+                character_id TEXT NOT NULL, participant_read INTEGER NOT NULL DEFAULT 0,
+                operator_read INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(uid,character_id)
+            );
+            CREATE TABLE IF NOT EXISTS virtual_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                thread_id INTEGER NOT NULL REFERENCES virtual_threads(id) ON DELETE CASCADE,
+                role TEXT NOT NULL CHECK(role IN ('participant','operator')), author INTEGER NOT NULL,
+                body TEXT NOT NULL, nonce TEXT NOT NULL, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(thread_id,role,nonce)
+            );
+            CREATE INDEX IF NOT EXISTS virtual_messages_thread ON virtual_messages(thread_id,id);
+            PRAGMA user_version=7;
             CREATE INDEX IF NOT EXISTS notifications_pending ON notifications(done,next_try);
             CREATE INDEX IF NOT EXISTS messages_pair ON messages(a,b,id);
             CREATE INDEX IF NOT EXISTS profiles_search ON profiles(city_key, active, age);
@@ -178,6 +203,7 @@ class Store(AdminStore, TestingCatalogStore):
 
     async def delete(self, uid):
         async with self.transaction():
+            await self.db.execute('DELETE FROM virtual_sessions WHERE uid=?', (uid,))
             await self.db.execute('DELETE FROM profiles WHERE id=?', (uid,))
             await self.db.execute('DELETE FROM fsm WHERE user_id=?', (uid,))
 
@@ -439,7 +465,7 @@ class Store(AdminStore, TestingCatalogStore):
             if marker:
                 return False
             # Never treat an existing populated database as an empty target.
-            for table in ('profiles','fsm','bans','messages','moderation_audit','test_profile_reviews'):
+            for table in ('profiles','fsm','bans','messages','moderation_audit','test_profile_reviews','virtual_sessions'):
                 row=await self._one(f'SELECT count(*) AS n FROM {table}')
                 if row['n']:
                     return False
@@ -449,7 +475,7 @@ class Store(AdminStore, TestingCatalogStore):
         from dating.deployment import BootstrapError, validate_snapshot
         await asyncio.to_thread(validate_snapshot,staged)
         async with self.lock:
-            for table in ('profiles','fsm','bans','messages','deployment_state','moderation_audit','test_profile_reviews'):
+            for table in ('profiles','fsm','bans','messages','deployment_state','moderation_audit','test_profile_reviews','virtual_sessions'):
                 row=await self._one(f'SELECT count(*) AS n FROM {table}')
                 if row['n']:
                     raise BootstrapError('Целевая база уже содержит данные; замена запрещена')

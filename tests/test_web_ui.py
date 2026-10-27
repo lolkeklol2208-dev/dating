@@ -276,3 +276,54 @@ async def test_second_telegram_account_can_browse_test_profiles_without_admin_ac
             assert errors==[]
         finally:
             await browser.close()
+
+
+async def test_consented_virtual_match_friend_message_operator_reply_and_withdrawal(webapp,tmp_path):
+    from playwright.async_api import expect
+    client,db,_=webapp
+    async with playwright.async_playwright() as p:
+        browser=await p.chromium.launch(executable_path=shutil.which('chromium'),args=['--no-sandbox'])
+        try:
+            friend,errors=await telegram_page(browser,str(client.make_url('/')),1)
+            await friend.get_by_role('button',name='Включить тестовые знакомства',exact=True).click()
+            modal=friend.locator('#modal')
+            await expect(modal).to_contain_text('Ваши сообщения читает администратор')
+            await modal.get_by_role('button',name='Подтвердить и включить',exact=True).click()
+            assert not (await db.virtual_state(1))['enabled']
+            await modal.get_by_role('checkbox').check()
+            await modal.get_by_role('button',name='Подтвердить и включить',exact=True).click()
+            await expect(friend.locator('#swipe-card .photo-chip')).to_contain_text('ВИРТУАЛЬНЫЙ ПРОФИЛЬ')
+            await friend.locator('#swipe-card').scroll_into_view_if_needed()
+            await friend.screenshot(path=str(tmp_path/'virtual-feed.png'))
+            await friend.get_by_role('button',name='Нравится',exact=True).click()
+            await modal.get_by_role('heading',name='Тестовый мэтч создан',exact=True).wait_for()
+            await modal.get_by_role('button',name='Начать тестовый диалог',exact=True).click()
+            await friend.get_by_role('textbox',name='Сообщение',exact=True).fill('Привет! Проверяю тестовое знакомство.')
+            await friend.get_by_role('button',name='Отправить сообщение',exact=True).click()
+            await friend.get_by_text('Привет! Проверяю тестовое знакомство.',exact=True).wait_for()
+            owner,owner_errors=await telegram_page(browser,str(client.make_url('/')),99)
+            await owner.get_by_role('button',name='Админ-панель',exact=True).click()
+            await owner.get_by_role('button',name='Открыть тестовые диалоги',exact=False).click()
+            await expect(owner.locator('.chat-row[data-action=virtual-operator]')).to_have_count(1)
+            await owner.locator('.chat-row[data-action=virtual-operator]').click()
+            await owner.get_by_text('Привет! Проверяю тестовое знакомство.',exact=True).wait_for()
+            await owner.get_by_role('textbox',name='Сообщение',exact=True).fill('Привет! Это ответ администратора от имени Ани.')
+            await owner.get_by_role('button',name='Отправить сообщение',exact=True).click()
+            await friend.get_by_text('Привет! Это ответ администратора от имени Ани.',exact=True).wait_for(timeout=12000)
+            assert 'администратору' in await friend.locator('.virtual-disclosure').inner_text()
+            await friend.screenshot(path=str(tmp_path/'virtual-friend-chat.png'))
+            await owner.screenshot(path=str(tmp_path/'virtual-operator-chat.png'))
+            await friend.get_by_role('button',name='Назад',exact=True).click()
+            await friend.locator('.chat-row[data-action=chat]').click()
+            await friend.get_by_text('Привет! Это ответ администратора от имени Ани.',exact=True).wait_for()
+            await friend.get_by_role('button',name='Назад',exact=True).click()
+            await friend.get_by_role('button',name='Знакомства',exact=True).click()
+            await friend.get_by_role('button',name='Выключить и удалить',exact=True).click()
+            await modal.get_by_role('button',name='Выключить и удалить',exact=True).click()
+            await expect(friend.get_by_role('button',name='Включить тестовые знакомства',exact=True)).to_be_visible()
+            await expect(owner.locator('.admin-empty')).to_be_visible(timeout=12000)
+            assert not (await db.virtual_state(1))['enabled']
+            assert (await db.stats())['profiles']==(await db.stats())['messages']==0
+            assert errors==owner_errors==[]
+        finally:
+            await browser.close()
