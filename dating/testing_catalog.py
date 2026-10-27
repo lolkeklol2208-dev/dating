@@ -23,6 +23,22 @@ def default_review():
     return {'rating': 0, 'status': 'new', 'notes': '', 'revision': 0, 'updated': None}
 
 
+def preview_profiles(query='', city='', low=20, high=30, offset=0, limit=20):
+    """Read only immutable fixtures. Never load administrator review data."""
+    data = catalog()
+    query = query.casefold()
+    rows = [p for p in data['profiles'] if low <= p['age'] <= high
+            and (not city or p['city'].casefold() == city.casefold())
+            and (not query or query in ' '.join((p['name'],p['occupation'],p['bio'],*p['tags'])).casefold())]
+    return {'profiles': deepcopy(rows[offset:offset+limit]), 'total': len(rows),
+            'catalog_total': len(data['profiles']), 'more': offset+limit < len(rows),
+            'cities': sorted({p['city'] for p in data['profiles']}), 'notice': data['notice']}
+
+
+def preview_profile(profile_id):
+    return deepcopy(next((p for p in catalog()['profiles'] if p['id'] == profile_id), None))
+
+
 class TestingCatalogStore:
     async def testing_profiles(self, query='', city='', low=20, high=30, status='all', offset=0, limit=20):
         async with self.lock:

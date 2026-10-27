@@ -238,3 +238,41 @@ async def test_owner_testing_catalog_mobile_filters_notes_and_safe_export(webapp
             assert errors==[] and (await db.stats())['profiles']==0
         finally:
             await browser.close()
+
+
+async def test_second_telegram_account_can_browse_test_profiles_without_admin_access(webapp, tmp_path):
+    from playwright.async_api import expect
+    client, db, _ = webapp
+    await db.review_testing_profile('test-001',5,'needs_work','PRIVATE OWNER NOTE',0)
+    async with playwright.async_playwright() as p:
+        browser=await p.chromium.launch(executable_path=shutil.which('chromium'),args=['--no-sandbox'])
+        try:
+            page,errors=await telegram_page(browser,str(client.make_url('/')),2)
+            await page.get_by_role('button',name='Посмотреть тестовые анкеты',exact=True).click()
+            await expect(page.locator('.testing-card')).to_have_count(20)
+            assert await page.get_by_role('button',name='Админ-панель',exact=True).count()==0
+            assert await page.get_by_role('button',name='Скачать CSV · все 100',exact=False).count()==0
+            assert await page.locator('.testing-rating').count()==0
+            assert await page.get_by_label('Проверка',exact=True).count()==0
+            assert 'Это не реальные участницы' in await page.locator('.testing-notice').inner_text()
+            await page.get_by_role('textbox',name='Поиск',exact=True).fill('Аня')
+            await page.get_by_label('Город',exact=True).select_option('Москва')
+            await page.get_by_label('Возраст от',exact=True).fill('23')
+            await page.get_by_label('Возраст до',exact=True).fill('23')
+            await page.get_by_role('button',name='Применить',exact=True).click()
+            await expect(page.locator('.testing-card')).to_have_count(1)
+            await page.get_by_role('button',name='Посмотреть анкету',exact=True).click()
+            modal=page.locator('#modal')
+            await expect(modal.get_by_role('heading',name='Аня, 23',exact=True)).to_be_visible()
+            assert await modal.locator('form').count()==0
+            assert 'PRIVATE OWNER NOTE' not in await page.locator('body').inner_text()
+            await page.screenshot(path=str(tmp_path/'second-account-preview.png'))
+            await modal.get_by_role('button',name='Вернуться в каталог',exact=True).click()
+            await page.get_by_role('button',name='Вернуться к знакомствам',exact=True).click()
+            await page.get_by_role('button',name='Создать анкету',exact=True).wait_for()
+            assert (await db.stats())['profiles']==0 and await db.matches(2)==[]
+            assert (await db.testing_profile('test-001'))['review']['notes']=='PRIVATE OWNER NOTE'
+            assert not await page.evaluate('document.documentElement.scrollWidth>innerWidth')
+            assert errors==[]
+        finally:
+            await browser.close()

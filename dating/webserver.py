@@ -17,6 +17,7 @@ from aiogram.types import BufferedInputFile
 
 from dating.auth import validate_init_data
 from dating.admin_api import register_admin
+from dating.testing_api import register_testing_preview
 from dating.deployment import BootstrapError, MAX_SNAPSHOT, verify_import_headers, service_proof
 
 ROOT = Path(__file__).with_name('web')
@@ -395,6 +396,7 @@ def create_app(store, bot, token, admin_id=None, bootstrap=False, public_url=Non
     app = web.Application(middlewares=[boundary], client_max_size=6 * 1024 * 1024)
     app[API] = service
     register_admin(app, service, ApiError, number, public_profile)
+    register_testing_preview(app, ApiError, number)
     app.router.add_get('/api/deploy/challenge',service.deployment_challenge)
     app.router.add_post('/api/deploy/import',service.import_database)
     app.router.add_get('/api/events', service.events)

@@ -103,3 +103,38 @@ async def test_v5_upgrade_restart_preserves_notes_profiles_and_no_fixture_accoun
         assert (await db.testing_profile('test-001'))['review']['status']=='new'
     finally:
         await db.close()
+
+
+async def test_second_account_can_preview_all_fixtures_without_admin_review_data(webapp):
+    client,db,_=webapp
+    await db.review_testing_profile('test-001',5,'needs_work','ADMIN-PRIVATE-SENTINEL',0)
+    assert (await client.get('/api/test-profiles')).status==401
+    response=await client.get('/api/test-profiles?include_reviews=1&admin_id=99&status=reviewed',headers=headers(2))
+    data=await response.json()
+    assert response.status==200 and data['total']==data['catalog_total']==100
+    assert len(data['profiles'])==20 and data['notice']
+    assert 'summary' not in data and all('review' not in p and p['is_test'] for p in data['profiles'])
+    assert 'ADMIN-PRIVATE-SENTINEL' not in await response.text()
+    detail=await (await client.get('/api/test-profiles/test-001',headers=headers(2))).json()
+    assert 'review' not in detail['profile']
+    page=await (await client.get('/api/test-profiles?city=Москва&min_age=23&max_age=23&q=Аня',headers=headers(2))).json()
+    assert page['total']==1 and page['profiles'][0]['id']=='test-001'
+    for offset in (20,40,60,80):
+        page=await (await client.get('/api/test-profiles',params={'offset':offset},headers=headers(2))).json()
+        assert len(page['profiles'])==20
+    assert (await client.get('/api/test-profiles/export',headers=headers(2))).status==404
+    assert (await client.get('/api/admin/test-profiles',headers=headers(2))).status==403
+    assert (await client.post('/api/test-profiles/test-001',json={'notes':'overwrite'},headers=headers(2))).status==405
+    assert (await db.testing_profile('test-001'))['review']['notes']=='ADMIN-PRIVATE-SENTINEL'
+    assert (await db.stats())['profiles']==0 and await db.matches(2)==[]
+    assert await db.pending_notifications(10**15)==[]
+
+
+async def test_preview_obeys_api_ban_and_parameter_validation(webapp):
+    client,db,_=webapp
+    for params in [{'min_age':19},{'max_age':31},{'min_age':30,'max_age':20},{'offset':-1},{'q':'x'*81}]:
+        assert (await client.get('/api/test-profiles',params=params,headers=headers(2))).status==400
+    assert (await client.get('/api/test-profiles/missing',headers=headers(2))).status==404
+    await db.ban(2,'test restriction')
+    assert (await client.get('/api/test-profiles',headers=headers(2))).status==403
+    assert (await client.get('/api/test-profiles/test-001',headers=headers(2))).status==403
