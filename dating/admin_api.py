@@ -60,9 +60,47 @@ def register_admin(app, service, error, number, public_profile):
         service.publish(target)
         return web.json_response({'ok': True})
 
+    async def test_profiles(req):
+        require_admin(req)
+        query, city = req.query.get('q', '').strip(), req.query.get('city', '').strip()
+        status = req.query.get('status', 'all')
+        low = number(req.query.get('min_age', 20), 20, 30)
+        high = number(req.query.get('max_age', 30), 20, 30)
+        if len(query) > 80 or len(city) > 60 or low > high or status not in {'all','new','reviewed','needs_work'}:
+            raise error(400, 'Проверьте фильтры тестового каталога')
+        return web.json_response(await service.store.testing_profiles(query, city, low, high, status, offset(req)))
+
+    async def test_export(req):
+        require_admin(req)
+        return web.json_response(await service.store.testing_profiles(limit=100))
+
+    async def test_profile(req):
+        require_admin(req)
+        profile_id = req.match_info['profile_id']
+        if not await service.store.testing_profile(profile_id):
+            raise error(404, 'Тестовая анкета не найдена')
+        if req.method == 'POST':
+            data = await req.json()
+            if not isinstance(data, dict) or not isinstance(data.get('notes'), str):
+                raise error(400, 'Заполните заметку')
+            rating = number(data.get('rating'), 0, 5)
+            revision = number(data.get('revision'), 0, 2**31-1)
+            status = data.get('status')
+            if status not in {'new','reviewed','needs_work'} or len(data['notes']) > 2000:
+                raise error(400, 'Заметка до 2000 символов; выберите статус проверки')
+            try:
+                await service.store.review_testing_profile(profile_id, rating, status, data['notes'].strip(), revision)
+            except ModerationConflict as exc:
+                raise error(409, str(exc))
+        return web.json_response({'profile': await service.store.testing_profile(profile_id)})
+
     app.router.add_get('/api/admin/overview', overview)
     app.router.add_get('/api/admin/users', users)
     app.router.add_get('/api/admin/users/{target}', user)
     app.router.add_get('/api/admin/reports', reports)
     app.router.add_get('/api/admin/audit', audit)
     app.router.add_post('/api/admin/moderate', moderate)
+    app.router.add_get('/api/admin/test-profiles', test_profiles)
+    app.router.add_get('/api/admin/test-profiles/export', test_export)
+    app.router.add_get('/api/admin/test-profiles/{profile_id}', test_profile)
+    app.router.add_post('/api/admin/test-profiles/{profile_id}', test_profile)

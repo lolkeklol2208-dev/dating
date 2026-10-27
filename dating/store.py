@@ -8,9 +8,10 @@ from pathlib import Path
 
 import aiosqlite
 from dating.admin_store import AdminStore
+from dating.testing_catalog import TestingCatalogStore
 
 
-class Store(AdminStore):
+class Store(AdminStore, TestingCatalogStore):
     def __init__(self, path: str):
         self.path = path
         self.lock = asyncio.Lock()
@@ -116,7 +117,14 @@ class Store(AdminStore):
                 reason TEXT NOT NULL, report_actor INTEGER,
                 created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            PRAGMA user_version=5;
+            CREATE TABLE IF NOT EXISTS test_profile_reviews (
+                profile_id TEXT PRIMARY KEY,
+                rating INTEGER NOT NULL DEFAULT 0 CHECK(rating BETWEEN 0 AND 5),
+                status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new','reviewed','needs_work')),
+                notes TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1,
+                updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            PRAGMA user_version=6;
             CREATE INDEX IF NOT EXISTS notifications_pending ON notifications(done,next_try);
             CREATE INDEX IF NOT EXISTS messages_pair ON messages(a,b,id);
             CREATE INDEX IF NOT EXISTS profiles_search ON profiles(city_key, active, age);
@@ -431,7 +439,7 @@ class Store(AdminStore):
             if marker:
                 return False
             # Never treat an existing populated database as an empty target.
-            for table in ('profiles','fsm','bans','messages'):
+            for table in ('profiles','fsm','bans','messages','moderation_audit','test_profile_reviews'):
                 row=await self._one(f'SELECT count(*) AS n FROM {table}')
                 if row['n']:
                     return False
@@ -441,7 +449,7 @@ class Store(AdminStore):
         from dating.deployment import BootstrapError, validate_snapshot
         await asyncio.to_thread(validate_snapshot,staged)
         async with self.lock:
-            for table in ('profiles','fsm','bans','messages','deployment_state'):
+            for table in ('profiles','fsm','bans','messages','deployment_state','moderation_audit','test_profile_reviews'):
                 row=await self._one(f'SELECT count(*) AS n FROM {table}')
                 if row['n']:
                     raise BootstrapError('Целевая база уже содержит данные; замена запрещена')

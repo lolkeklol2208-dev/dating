@@ -2,9 +2,11 @@ import {api,post,demo,telegram as tg,imageSource,clearPhotos,subscribe} from './
 import {icon} from './icons.js';
 import {spring} from './motion.js';
 import {createAdmin} from './admin.js';
+import {createTesting} from './testing.js';
 const root=document.querySelector('#app'), modal=document.querySelector('#modal');
 const h=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const state={route:'discover',me:null,user:null,candidate:null,matches:[],more:false,chat:null,messages:[],peerRead:0,pending:false,version:0};
+const testing=createTesting({h,render:setPage,showModal,modalTop,toast,isActive:()=>state.route==='testing'});
 const admin=createAdmin({h,render:setPage,photo,showModal,modalTop,toast,ownId:()=>state.user?.id,isActive:()=>state.route==='admin'});
 const people=new Map(),drafts=new Map(),readMarks=new Map();let pollBusy=false,toastTimer,readTimer,theme;
 try{theme=localStorage.getItem('metch-theme');}catch{}
@@ -28,12 +30,13 @@ function showModal(content){if(modal.open)modal.close();modal.innerHTML=content;
 function modalTop(title){return `<div class="modal-heading"><h2>${title}</h2><button class="icon-button" data-close aria-label="Закрыть">${icon('x')}</button></div>`;}
 modal.addEventListener('click',e=>{if(e.target.closest('[data-close]'))modal.close();if(e.target===modal){const b=modal.getBoundingClientRect();if(e.clientX<b.left||e.clientX>b.right||e.clientY<b.top||e.clientY>b.bottom)modal.close();}});
 async function confirm(title,text,label='Подтвердить',danger=false){return new Promise(resolve=>{showModal(modalTop(title)+`<p class="modal-description">${h(text)}</p><div class="modal-actions"><button class="${danger?'danger':'primary'}" id="confirm">${h(label)}</button><button class="secondary" data-close>Отмена</button></div>`);let result=false;modal.querySelector('#confirm').onclick=()=>{result=true;modal.close();};modal.addEventListener('close',()=>resolve(result),{once:true});});}
-function setPage(body,thread=false){root.innerHTML=frame(body,thread);hydrate();document.title='Мэтч · '+({discover:'Знакомства',matches:'Ваши мэтчи',chats:'Диалоги',chat:'Переписка',profile:'Ваша анкета',admin:'Админ-панель'}[state.route]||'На одной волне');}
-async function navigate(route){if(route==='admin'&&!state.user?.is_admin){toast('Нет доступа к админ-панели');return;}state.version++;state.route=route;state.chat=null;state.pending=false;const version=state.version;try{tg?.BackButton?.hide();}catch{}setPage(`<main class="page"><div class="loading-card" role="status" aria-label="Загрузка"></div></main>`);try{
+function setPage(body,thread=false){root.innerHTML=frame(body,thread);hydrate();document.title='Мэтч · '+({discover:'Знакомства',matches:'Ваши мэтчи',chats:'Диалоги',chat:'Переписка',profile:'Ваша анкета',admin:'Админ-панель',testing:'Тестовые анкеты'}[state.route]||'На одной волне');}
+async function navigate(route){if(['admin','testing'].includes(route)&&!state.user?.is_admin){toast('Нет доступа к админ-панели');return;}state.version++;state.route=route;state.chat=null;state.pending=false;const version=state.version;try{tg?.BackButton?.hide();}catch{}setPage(`<main class="page"><div class="loading-card" role="status" aria-label="Загрузка"></div></main>`);try{
  if(route==='discover'){if(state.me)await loadCandidate(version);else renderDiscover();}
  if(route==='matches'||route==='chats'){await loadMatches();if(version===state.version)renderMatches(route);}
  if(route==='profile')renderProfile();
  if(route==='admin')await admin.open();
+ if(route==='testing')await testing.open();
  }catch(error){if(version!==state.version)return;setPage(`<main class="page">${empty('refresh','Не удалось загрузить',h(error.message),'Повторить',route)}</main>`);}}
 async function loadCandidate(version=state.version){const data=await api('/api/candidate');if(version!==state.version||state.route!=='discover')return;state.candidate=remember(data.profile);state.me.active=data.active;renderDiscover();}
 function aside(){return `<aside class="side-panel"><div class="note-card"><div class="note-icon">${icon('spark')}</div><h3>Меньше свайпов.<br>Больше совпадений.</h3><p>Здесь не нужно быть идеальным.<br>Достаточно быть собой.</p><div class="mini-divider"></div><div class="tiny-title">Всё просто</div><div class="step"><span>01</span>Заметьте своего человека</div><div class="step"><span>02</span>Поставьте лайк</div><div class="step"><span>03</span>Начните с «привет»</div></div><div class="note-card"><p class="quote">А вдруг это<br>ваш <em>мэтч?</em></p><div class="mini-divider"></div><p>Лайки остаются анонимными,<br>пока симпатия не станет взаимной.</p></div><div class="aside-footer">${icon('shield')} &nbsp;В вашем темпе. Без давления.<br><b>Только 18+</b> · Будьте бережны друг к другу</div></aside>`;}
@@ -97,8 +100,9 @@ function safety(id){const p=people.get(id);showModal(modalTop(p?.name||'Ваше
  modal.querySelector('#report').onclick=()=>{showModal(modalTop('Что случилось?')+'<p class="modal-description">Жалоба попадёт модератору. Человек будет заблокирован для вас.</p><div class="modal-actions"><button class="secondary" data-reason="spam">Спам или мошенничество</button><button class="secondary" data-reason="content">Неприемлемый контент</button><button class="secondary" data-reason="underage">Пользователю меньше 18 лет</button></div>');modal.querySelectorAll('[data-reason]').forEach(b=>b.onclick=()=>performSafety('report',id,b.dataset.reason));};}
 async function performSafety(action,id,reason){try{await post('/api/actions/'+action,{target:id,reason});modal.close();state.matches=state.matches.filter(p=>p.id!==id);await navigate(state.route==='discover'?'discover':'chats');toast(action==='report'?'Жалоба сохранена. Спасибо, что помогаете.':'Готово. Вы управляете своим пространством.');}catch(error){toast(error.message);}}
 root.addEventListener('click',async e=>{const button=e.target.closest('button[data-action]');if(!button||button.disabled)return;const action=button.dataset.action,id=Number(button.dataset.id);feedback();try{
+ if(action.startsWith('testing-')){await testing.handle(button);return;}
  if(action.startsWith('admin-')){await admin.handle(button);return;}
- if(['discover','matches','chats','profile','admin'].includes(action)){await navigate(action);return;}
+ if(['discover','matches','chats','profile','admin','testing'].includes(action)){await navigate(action);return;}
  if(action==='theme'){applyTheme(theme==='dark'?'light':'dark');if(state.route==='profile')renderProfile();}
  if(action==='filters')filterDialog();if(action==='edit')editProfile();if(action==='policy')policy();
  if(action==='like'||action==='skip')await swipe(action);
